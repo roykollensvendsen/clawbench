@@ -156,6 +156,8 @@ class DebugStepper:
     async def should_pause(self) -> bool:
         if not self.enabled:
             return False
+        async with self._lock:
+            self._call_index += 1
         if self.mode == "continue":
             if self._breakpoint_at is not None and self._call_index >= self._breakpoint_at:
                 self.mode = "step"
@@ -167,7 +169,6 @@ class DebugStepper:
     async def wait_for_release(self, tool: str, args: dict, result: dict) -> None:
         """Block until the debugger releases this call."""
         async with self._lock:
-            self._call_index += 1
             self._pending = {
                 "index": self._call_index,
                 "tool": tool,
