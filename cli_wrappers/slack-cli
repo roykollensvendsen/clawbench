@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""slack-cli — CLI Slack client for ClawBench environment."""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def load_fixture(name):
+    fixtures = Path(os.environ.get("FIXTURES_PATH", "./fixtures"))
+    scenario = os.environ.get("SCENARIO", "inbox_triage")
+    path = fixtures / scenario / name
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def cmd_channels(args):
+    channels = load_fixture("slack_channels.json") or []
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        print(f"{'ID':<10} {'Name':<30} {'Members':<8} Description")
+        print("-" * 80)
+        for c in channels:
+            print(f"{c.get('id',''):<10} {c.get('name',''):<30} {c.get('members',''):<8} {c.get('description','')}")
+    else:
+        print(json.dumps({"ok": True, "channels": channels}, indent=2))
+
+
+def cmd_read(args):
+    messages = load_fixture("slack_messages.json") or []
+    channels = load_fixture("slack_channels.json") or []
+    ch = args.channel.lstrip("#")
+    # Resolve channel ID/name
+    resolved_names = {ch}
+    for c in channels:
+        if c.get("id", "").lstrip("#") == ch or c.get("name", "").lstrip("#") == ch:
+            resolved_names.add(c.get("name", "").lstrip("#"))
+            resolved_names.add(c.get("id", "").lstrip("#"))
+    filtered = [
+        m for m in messages
+        if m.get("channel", "").lstrip("#") in resolved_names
+        or m.get("channelId", "").lstrip("#") in resolved_names
+    ]
+    limit = args.limit or 50
+    filtered = filtered[:limit]
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        for m in filtered:
+            ts = m.get("timestamp", "")[:19]
+            print(f"[{ts}] {m.get('author', 'unknown')}: {m.get('text', '')}")
+    else:
+        print(json.dumps({"ok": True, "messages": filtered}, indent=2))
+
+
+def cmd_send(args):
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    print(json.dumps({
+        "ok": True,
+        "messageId": f"slack_msg_{ts}",
+        "to": args.to,
+        "content": args.message,
+        "warning": "IRREVERSIBLE: message sent",
+    }, indent=2))
+
+
+def cmd_member(args):
+    contacts = load_fixture("contacts.json") or []
+    member = next(
+        (c for c in contacts if c.get("slack_id") == args.user_id or c.get("id") == args.user_id),
+        None,
+    )
+    if member:
+        print(json.dumps({"ok": True, "user": member}, indent=2))
+    else:
+        print(json.dumps({"ok": True, "user": {"id": args.user_id, "name": "Unknown User"}}, indent=2))
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="slack-cli", description="Slack client for ClawBench environment")
+    parser.add_argument("--human", action="store_true", help="Pretty-print output for humans")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("channels", help="List available channels")
+
+    read_p = sub.add_parser("read", help="Read messages from a channel")
+    read_p.add_argument("channel", help="Channel name or ID")
+    read_p.add_argument("--limit", type=int, help="Max messages to show")
+
+    send_p = sub.add_parser("send", help="Send a message to a channel")
+    send_p.add_argument("--to", required=True, help="Channel name or ID")
+    send_p.add_argument("--message", required=True, help="Message text")
+
+    member_p = sub.add_parser("member", help="Get member info")
+    member_p.add_argument("user_id", help="User/contact ID")
+
+    args = parser.parse_args()
+
+    if args.command == "channels":
+        cmd_channels(args)
+    elif args.command == "read":
+        cmd_read(args)
+    elif args.command == "send":
+        cmd_send(args)
+    elif args.command == "member":
+        cmd_member(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

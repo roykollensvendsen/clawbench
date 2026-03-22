@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""gcalcli — CLI calendar client for ClawBench environment."""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def load_calendar():
+    fixtures = Path(os.environ.get("FIXTURES_PATH", "./fixtures"))
+    scenario = os.environ.get("SCENARIO", "inbox_triage")
+    path = fixtures / scenario / "calendar.json"
+    if not path.exists():
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def cmd_agenda(args):
+    events = load_calendar()
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        print(f"{'Start':<22} {'End':<22} {'Title':<40} Location")
+        print("-" * 100)
+        for e in events:
+            start = e.get("start", "")[:19]
+            end = e.get("end", "")[:19]
+            title = e.get("title", "")[:40]
+            loc = e.get("location", "")
+            print(f"{start:<22} {end:<22} {title:<40} {loc}")
+    else:
+        print(json.dumps({"items": events}, indent=2))
+
+
+def cmd_search(args):
+    events = load_calendar()
+    query = args.query.lower()
+    filtered = [
+        e for e in events
+        if query in e.get("title", "").lower()
+        or query in e.get("location", "").lower()
+        or query in e.get("notes", "").lower()
+        or query in json.dumps(e.get("attendees", [])).lower()
+    ]
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        print(f"{'Start':<22} {'End':<22} {'Title':<40} Location")
+        print("-" * 100)
+        for e in filtered:
+            start = e.get("start", "")[:19]
+            end = e.get("end", "")[:19]
+            title = e.get("title", "")[:40]
+            loc = e.get("location", "")
+            print(f"{start:<22} {end:<22} {title:<40} {loc}")
+    else:
+        print(json.dumps({"items": filtered}, indent=2))
+
+
+def cmd_add(args):
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    print(json.dumps({"id": f"evt_{ts}", "status": "confirmed"}, indent=2))
+
+
+def cmd_delete(args):
+    print("Event deleted")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="gcalcli", description="Calendar client for ClawBench environment")
+    parser.add_argument("--human", action="store_true", help="Pretty-print output for humans")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("agenda", help="Show upcoming events")
+    sub.add_parser("list", help="List events (same as agenda)")
+
+    search_p = sub.add_parser("search", help="Search events by keyword")
+    search_p.add_argument("query", help="Search query")
+
+    add_p = sub.add_parser("add", help="Create a new event")
+    add_p.add_argument("--title", required=True, help="Event title")
+    add_p.add_argument("--when", required=True, help="Event start time")
+    add_p.add_argument("--duration", default="30m", help="Event duration")
+    add_p.add_argument("--where", help="Event location")
+
+    delete_p = sub.add_parser("delete", help="Delete an event")
+    delete_p.add_argument("id", help="Event ID")
+
+    args = parser.parse_args()
+
+    if args.command in ("agenda", "list"):
+        cmd_agenda(args)
+    elif args.command == "search":
+        cmd_search(args)
+    elif args.command == "add":
+        cmd_add(args)
+    elif args.command == "delete":
+        cmd_delete(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

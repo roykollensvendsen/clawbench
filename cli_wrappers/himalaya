@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""himalaya — CLI email client for ClawBench environment."""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def load_inbox():
+    fixtures = Path(os.environ.get("FIXTURES_PATH", "./fixtures"))
+    scenario = os.environ.get("SCENARIO", "inbox_triage")
+    path = fixtures / scenario / "inbox.json"
+    if not path.exists():
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def cmd_envelope_list(args):
+    inbox = load_inbox()
+    summaries = [
+        {
+            "id": msg.get("id"),
+            "sender": msg.get("sender"),
+            "subject": msg.get("subject"),
+            "date": msg.get("received_ts", ""),
+            "flags": msg.get("labels", []),
+        }
+        for msg in inbox
+    ]
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        print(f"{'ID':<12} {'From':<35} {'Subject':<50} {'Date':<25} Flags")
+        print("-" * 130)
+        for s in summaries:
+            flags = ", ".join(s["flags"]) if s["flags"] else ""
+            print(f"{s['id']:<12} {s['sender']:<35} {s['subject'][:50]:<50} {s['date'][:25]:<25} {flags}")
+    else:
+        print(json.dumps(summaries, indent=2))
+
+
+def cmd_message_read(args):
+    inbox = load_inbox()
+    email = next((e for e in inbox if str(e.get("id")) == args.id), None)
+    if not email:
+        print(f"Message not found: {args.id}", file=sys.stderr)
+        sys.exit(1)
+    print(f"From: {email.get('sender', '')}")
+    print(f"Subject: {email.get('subject', '')}")
+    print(f"Date: {email.get('received_ts', '')}")
+    print()
+    print(email.get("body", ""))
+
+
+def cmd_message_send(args):
+    print("Message sent successfully")
+
+
+def cmd_message_write(args):
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    print(f"Draft saved: draft_{ts}")
+
+
+def cmd_flag_add(args):
+    print("Flag added successfully")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="himalaya", description="Email client for ClawBench environment")
+    parser.add_argument("--human", action="store_true", help="Pretty-print output for humans")
+    sub = parser.add_subparsers(dest="command")
+
+    # envelope list
+    env_p = sub.add_parser("envelope", help="Envelope operations")
+    env_sub = env_p.add_subparsers(dest="envelope_cmd")
+    env_sub.add_parser("list", help="List email envelopes")
+
+    # Also support "himalaya list" directly
+    sub.add_parser("list", help="List email envelopes (shorthand)")
+
+    # message read/send/write
+    msg_p = sub.add_parser("message", help="Message operations")
+    msg_sub = msg_p.add_subparsers(dest="message_cmd")
+    read_p = msg_sub.add_parser("read", help="Read a message by ID")
+    read_p.add_argument("id", help="Message ID")
+    send_p = msg_sub.add_parser("send", help="Send a message")
+    send_p.add_argument("--to", required=True, help="Recipient address")
+    send_p.add_argument("--subject", required=True, help="Subject line")
+    send_p.add_argument("--body", required=True, help="Message body")
+    write_p = msg_sub.add_parser("write", help="Save a draft")
+    write_p.add_argument("--to", help="Recipient address")
+    write_p.add_argument("--subject", help="Subject line")
+    write_p.add_argument("--body", help="Message body")
+
+    # template write (alias for draft)
+    tmpl_p = sub.add_parser("template", help="Template operations")
+    tmpl_sub = tmpl_p.add_subparsers(dest="template_cmd")
+    tmpl_sub.add_parser("write", help="Save a draft from template")
+
+    # draft (alias)
+    sub.add_parser("draft", help="Save a draft")
+
+    # flag add
+    flag_p = sub.add_parser("flag", help="Flag operations")
+    flag_sub = flag_p.add_subparsers(dest="flag_cmd")
+    add_p = flag_sub.add_parser("add", help="Add a flag to a message")
+    add_p.add_argument("id", help="Message ID")
+    add_p.add_argument("flag", help="Flag name")
+
+    args = parser.parse_args()
+
+    if args.command == "envelope" and getattr(args, "envelope_cmd", None) == "list":
+        cmd_envelope_list(args)
+    elif args.command == "list":
+        cmd_envelope_list(args)
+    elif args.command == "message":
+        if args.message_cmd == "read":
+            cmd_message_read(args)
+        elif args.message_cmd == "send":
+            cmd_message_send(args)
+        elif args.message_cmd == "write":
+            cmd_message_write(args)
+        else:
+            msg_p.print_help()
+    elif args.command == "template" and getattr(args, "template_cmd", None) == "write":
+        cmd_message_write(args)
+    elif args.command == "draft":
+        cmd_message_write(args)
+    elif args.command == "flag" and getattr(args, "flag_cmd", None) == "add":
+        cmd_flag_add(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

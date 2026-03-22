@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -r requirements-mock.txt
 
 COPY clawbench/mock_tools/ ./mock_tools/
 
+COPY cli_wrappers/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/himalaya /usr/local/bin/gcalcli /usr/local/bin/notion-cli /usr/local/bin/slack-cli /usr/local/bin/memo
+
 EXPOSE 3001
 
 CMD ["python", "-m", "mock_tools.server"]

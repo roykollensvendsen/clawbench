@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""memo — CLI memory/context search for ClawBench environment."""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def get_fixture_base():
+    fixtures = Path(os.environ.get("FIXTURES_PATH", "./fixtures"))
+    scenario = os.environ.get("SCENARIO", "inbox_triage")
+    return fixtures / scenario
+
+
+def cmd_search(args):
+    base = get_fixture_base()
+    query = args.query.lower()
+    max_results = args.max_results
+    results = []
+
+    memory_dir = base / "memory"
+    if memory_dir.exists():
+        for fpath in sorted(memory_dir.iterdir()):
+            if fpath.is_file():
+                content = fpath.read_text()
+                lines = content.split("\n")
+                for i, line in enumerate(lines):
+                    if any(word in line.lower() for word in query.split()):
+                        start = max(0, i - 1)
+                        end = min(len(lines), i + 3)
+                        snippet = "\n".join(lines[start:end])
+                        rel_path = f"memory/{fpath.name}"
+                        results.append({
+                            "snippet": snippet,
+                            "path": rel_path,
+                            "startLine": start + 1,
+                            "endLine": end,
+                            "score": 0.85,
+                            "citation": f"{rel_path}#L{start + 1}-L{end}",
+                        })
+                        if len(results) >= max_results:
+                            break
+            if len(results) >= max_results:
+                break
+
+    # Also search MEMORY.md
+    mem_md = base / "MEMORY.md"
+    if mem_md.exists() and len(results) < max_results:
+        content = mem_md.read_text()
+        lines = content.split("\n")
+        for i, line in enumerate(lines):
+            if any(word in line.lower() for word in query.split()):
+                start = max(0, i - 1)
+                end = min(len(lines), i + 3)
+                snippet = "\n".join(lines[start:end])
+                results.append({
+                    "snippet": snippet,
+                    "path": "MEMORY.md",
+                    "startLine": start + 1,
+                    "endLine": end,
+                    "score": 0.80,
+                    "citation": f"MEMORY.md#L{start + 1}-L{end}",
+                })
+                if len(results) >= max_results:
+                    break
+
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        if not results:
+            print("No results found.")
+            return
+        for r in results:
+            print(f"--- {r['citation']} (score: {r['score']}) ---")
+            print(r["snippet"])
+            print()
+    else:
+        print(json.dumps({"results": results, "provider": "mock", "citations": "on"}, indent=2))
+
+
+def cmd_read(args):
+    base = get_fixture_base()
+    req_path = args.path
+
+    for fpath in [base / req_path, base / "memory" / req_path]:
+        resolved = fpath.resolve()
+        if resolved.exists() and resolved.is_file():
+            content = resolved.read_text()
+            lines = content.split("\n")
+            start = max(0, (args.from_line or 1) - 1)
+            end = start + (args.lines or 100)
+            text = "\n".join(lines[start:end])
+            print(json.dumps({"path": req_path, "text": text}, indent=2))
+            return
+
+    print(json.dumps({"path": req_path, "text": "", "error": f"File not found: {req_path}"}, indent=2))
+    sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="memo", description="Memory/context search for ClawBench environment")
+    parser.add_argument("--human", action="store_true", help="Pretty-print output for humans")
+    sub = parser.add_subparsers(dest="command")
+
+    search_p = sub.add_parser("search", help="Search memory files for matching content")
+    search_p.add_argument("query", help="Search query (keywords)")
+    search_p.add_argument("--max-results", type=int, default=5, help="Maximum results to return")
+
+    read_p = sub.add_parser("read", help="Read a specific memory file")
+    read_p.add_argument("path", help="File path relative to scenario fixtures")
+    read_p.add_argument("--from-line", type=int, help="Start line number")
+    read_p.add_argument("--lines", type=int, help="Number of lines to read")
+
+    args = parser.parse_args()
+
+    if args.command == "search":
+        cmd_search(args)
+    elif args.command == "read":
+        cmd_read(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

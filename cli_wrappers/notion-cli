@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""notion-cli — CLI task board client for ClawBench environment."""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def load_fixture(name):
+    fixtures = Path(os.environ.get("FIXTURES_PATH", "./fixtures"))
+    scenario = os.environ.get("SCENARIO", "inbox_triage")
+    path = fixtures / scenario / name
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def cmd_tasks(args):
+    tasks = load_fixture("tasks.json") or []
+    if args.status:
+        tasks = [t for t in tasks if t.get("status", "").lower() == args.status.lower()]
+    if args.priority:
+        tasks = [t for t in tasks if t.get("priority", "").lower() == args.priority.lower()]
+    if args.assignee:
+        tasks = [t for t in tasks if t.get("assignee", "").lower() == args.assignee.lower()]
+    if os.environ.get("HUMAN_MODE") == "1" or getattr(args, "human", False):
+        print(f"{'ID':<12} {'Title':<45} {'Status':<15} {'Priority':<10} {'Assignee':<20} Due")
+        print("-" * 120)
+        for t in tasks:
+            print(f"{t.get('id',''):<12} {t.get('title','')[:45]:<45} {t.get('status',''):<15} {t.get('priority',''):<10} {t.get('assignee',''):<20} {t.get('due_date','')}")
+    else:
+        print(json.dumps({"results": tasks}, indent=2))
+
+
+def cmd_task(args):
+    tasks = load_fixture("tasks.json") or []
+    item = next((t for t in tasks if str(t.get("id")) == args.id), None)
+    if not item:
+        docs = load_fixture("documents.json") or []
+        item = next((d for d in docs if str(d.get("id")) == args.id), None)
+    if not item:
+        print(f"Page not found: {args.id}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(item, indent=2))
+
+
+def cmd_create(args):
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    print(json.dumps({"id": f"page_{ts}", "status": "created"}, indent=2))
+
+
+def cmd_update(args):
+    print(json.dumps({"status": "updated"}, indent=2))
+
+
+def cmd_docs(args):
+    docs = load_fixture("documents.json") or []
+    print(json.dumps({"results": docs}, indent=2))
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="notion-cli", description="Task board client for ClawBench environment")
+    parser.add_argument("--human", action="store_true", help="Pretty-print output for humans")
+    sub = parser.add_subparsers(dest="command")
+
+    tasks_p = sub.add_parser("tasks", help="List tasks with optional filters")
+    tasks_p.add_argument("--status", help="Filter by status")
+    tasks_p.add_argument("--priority", help="Filter by priority")
+    tasks_p.add_argument("--assignee", help="Filter by assignee")
+
+    task_p = sub.add_parser("task", help="Get full detail for a task or document")
+    task_p.add_argument("id", help="Task/page ID")
+
+    create_p = sub.add_parser("create", help="Create a new page")
+    create_p.add_argument("--title", required=True, help="Page title")
+    create_p.add_argument("--priority", help="Priority level")
+    create_p.add_argument("--assignee", help="Assignee")
+    create_p.add_argument("--status", default="not_started", help="Initial status")
+
+    update_p = sub.add_parser("update", help="Update a page")
+    update_p.add_argument("id", help="Page ID")
+    update_p.add_argument("--status", help="New status")
+    update_p.add_argument("--priority", help="New priority")
+    update_p.add_argument("--assignee", help="New assignee")
+
+    sub.add_parser("docs", help="List documents")
+
+    args = parser.parse_args()
+
+    if args.command == "tasks":
+        cmd_tasks(args)
+    elif args.command == "task":
+        cmd_task(args)
+    elif args.command == "create":
+        cmd_create(args)
+    elif args.command == "update":
+        cmd_update(args)
+    elif args.command == "docs":
+        cmd_docs(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
