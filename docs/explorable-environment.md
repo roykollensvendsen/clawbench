@@ -111,22 +111,73 @@ This replaces policy-based access control (hoping the agent obeys AGENTS.md) wit
 
 ## Interactive Debugger
 
-`scripts/debug_episode.py` streams tool calls in real time during episode execution, replacing the cycle "edit policy → run 10 min eval → read log → guess".
+`scripts/debug_episode.py` lets you step through agent tool calls one at a time, inspect arguments and results, then decide whether to continue. Replaces the cycle "edit policy → run 10 min eval → read log → guess".
 
-### Watch Mode (default)
+### Step Mode (default) — True Step-Through
+
+Requires `DEBUG_STEP=1` on the mock server. Each tool call pauses execution until you release it.
 
 ```bash
-# Start services first (docker compose up)
-python scripts/debug_episode.py --scenario client_escalation --wait
+# Start services with debug stepping enabled
+DEBUG_STEP=1 docker compose up
+
+# In another terminal — step through an episode
+python scripts/debug_episode.py -s client_escalation --wait
 ```
 
-Shows each tool call with colored output as it happens, then scores the episode.
+Output looks like:
+
+```
+══════════════════════════════════════════════════════════════════════
+  STEP-THROUGH DEBUG: client_escalation
+  Controls: [Enter]=step  [c]=continue  [b N]=break at N  [d]=detail  [q]=quit
+══════════════════════════════════════════════════════════════════════
+
+[1] exec
+  $ himalaya envelope list
+  → {"status": "completed", "exitCode": 0, "aggregated": "[{\"id\": \"msg_101\"...
+
+  [s]tep [c]ontinue [b N]reak [d]etail [q]uit > s
+
+[2] exec
+  $ himalaya message read msg_101
+  → {"status": "completed", "exitCode": 0, "aggregated": "From: vp-eng@...
+
+  [s]tep [c]ontinue [b N]reak [d]etail [q]uit > d
+
+  Full result:
+  {
+    "status": "completed",
+    "exitCode": 0,
+    "aggregated": "From: vp-eng@acmecorp.com\nSubject: ESCALATION..."
+  }
+
+  [s]tep [c]ontinue [b N]reak [d]etail [q]uit > c
+  (continues remaining calls without pausing)
+```
+
+Controls:
+| Key | Action |
+|-----|--------|
+| `Enter` / `s` | **Step** — release current call, pause at next |
+| `c` | **Continue** — run all remaining calls without pausing |
+| `b N` | **Break at N** — continue until call #N, then pause |
+| `d` | **Detail** — show full result JSON for current call |
+| `q` | **Quit** — release all remaining calls and exit |
+
+### Watch Mode — Live Stream Without Pausing
+
+```bash
+python scripts/debug_episode.py -s client_escalation --watch --wait
+```
+
+Streams tool calls in real time without pausing, then scores the episode.
 
 ### With Custom AGENTS.md
 
 ```bash
 python scripts/debug_episode.py \
-  --scenario inbox_triage \
+  -s inbox_triage \
   --agents-md /path/to/my/AGENTS.md
 ```
 
@@ -138,7 +189,19 @@ Step through a saved evaluation result interactively:
 python scripts/debug_episode.py --replay packs/eval-results/run-1-seed201.json
 ```
 
-Use `[Enter]` to advance, `[d]` for detail, `[q]` to quit.
+### Debug API Endpoints
+
+The mock server exposes these endpoints when `DEBUG_STEP=1`:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/debug/status` | GET | Current stepper state (enabled, mode, call count) |
+| `/debug/pending` | GET | Currently paused tool call (tool, args, result) |
+| `/debug/release` | POST | Release the paused call |
+| `/debug/mode` | POST | Set mode: `{"mode": "step"}`, `{"mode": "continue"}`, or `{"mode": "continue", "break_at": 5}` |
+| `/debug/enable` | POST | Enable stepping mid-session |
+| `/debug/disable` | POST | Disable stepping, release pending call |
+| `/debug/reset` | POST | Reset state for new episode |
 
 ## MCP Server
 
