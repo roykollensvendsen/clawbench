@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -244,11 +245,36 @@ def handle_slack(data: dict, scenario: str) -> dict:
 # Exec handler — pattern-matches command strings against fixtures
 # ============================================================================
 
+def _handle_exec_real(data: dict, scenario: str) -> dict:
+    """Execute commands via subprocess (CLI wrappers must be on PATH)."""
+    command = data.get("command", "")
+    env = {
+        **os.environ,
+        "FIXTURES_PATH": str(FIXTURES_PATH),
+        "SCENARIO": scenario,
+    }
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True,
+            timeout=30, env=env,
+        )
+        if result.returncode == 0:
+            return _exec_success(result.stdout.rstrip("\n"))
+        return _exec_failure(
+            (result.stderr or result.stdout).rstrip("\n"),
+            exit_code=result.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return _exec_failure("Command timed out", exit_code=124)
+
+
 def handle_exec(data: dict, scenario: str) -> dict:
     """
     Handle the exec tool by pattern-matching the command string.
 
-    Supported patterns:
+    When EXEC_MODE=real, delegates to subprocess execution instead.
+
+    Supported patterns (mock mode):
       - himalaya envelope list     -> inbox fixture
       - himalaya message read <id> -> email lookup
       - himalaya message write ... -> draft echo
@@ -260,6 +286,9 @@ def handle_exec(data: dict, scenario: str) -> dict:
       - curl.*googleapis.com/calendar -> calendar fixture
       - gh ...                      -> github mock
     """
+    if os.getenv("EXEC_MODE") == "real":
+        return _handle_exec_real(data, scenario)
+
     command = data.get("command", "")
     cmd = command.strip()
 
