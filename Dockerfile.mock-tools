@@ -7,8 +7,28 @@ RUN pip install --no-cache-dir -r requirements-mock.txt
 
 COPY clawbench/mock_tools/ ./mock_tools/
 
+# CLI wrappers — available to both server (EXEC_MODE=real) and human users
 COPY cli_wrappers/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/himalaya /usr/local/bin/gcalcli /usr/local/bin/notion-cli /usr/local/bin/slack-cli /usr/local/bin/memo
+
+# --- Phase 4: Environment-enforced security (opt-in via SECURE_MODE=1) ---
+# Create restricted agent user. When the agent process runs as 'agent',
+# it can only execute approved wrappers — no access to fixtures, scenarios,
+# or arbitrary shell commands.
+# --- Phase 4: Environment-enforced security (opt-in via SECURE_MODE=1) ---
+# Patch shebangs to absolute python3 path (no env lookup needed in restricted PATH)
+RUN sed -i '1s|#!/usr/bin/env python3|#!/usr/local/bin/python3|' \
+    /usr/local/bin/himalaya /usr/local/bin/gcalcli /usr/local/bin/notion-cli \
+    /usr/local/bin/slack-cli /usr/local/bin/memo
+
+# Create restricted agent user and tools directory with only approved wrappers
+RUN useradd -r -s /bin/false agent \
+    && mkdir -p /app/tools \
+    && ln -s /usr/local/bin/himalaya  /app/tools/himalaya \
+    && ln -s /usr/local/bin/gcalcli   /app/tools/gcalcli \
+    && ln -s /usr/local/bin/notion-cli /app/tools/notion-cli \
+    && ln -s /usr/local/bin/slack-cli /app/tools/slack-cli \
+    && ln -s /usr/local/bin/memo      /app/tools/memo
 
 EXPOSE 3001
 
