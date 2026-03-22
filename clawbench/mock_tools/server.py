@@ -123,6 +123,93 @@ class ScenarioState:
 state = ScenarioState(os.getenv("SCENARIO", "inbox_triage"))
 
 
+# ---------------------------------------------------------------------------
+# Debug stepper — blocks tool calls until the debugger releases them
+# ---------------------------------------------------------------------------
+class DebugStepper:
+    """Blocking debug breakpoint for tool calls.
+
+    When enabled, each tool call blocks until the debugger releases it.
+    The debugger polls /debug/pending to see the pending call, then
+    POSTs /debug/release to let it through.
+    """
+
+    def __init__(self):
+        self.enabled = os.getenv("DEBUG_STEP", "") == "1"
+        self.mode = "step"  # "step" = pause each, "continue" = run freely
+        self._pending: dict | None = None
+        self._pending_event = asyncio.Event()
+        self._release_event = asyncio.Event()
+        self._lock = asyncio.Lock()
+        self._call_index = 0
+        self._breakpoint_at: int | None = None  # break at call N
+
+    async def reset(self):
+        async with self._lock:
+            self._pending = None
+            self._call_index = 0
+            self._breakpoint_at = None
+            self.mode = "step"
+            self._pending_event.clear()
+            self._release_event.clear()
+
+    async def should_pause(self) -> bool:
+        if not self.enabled:
+            return False
+        if self.mode == "continue":
+            if self._breakpoint_at is not None and self._call_index >= self._breakpoint_at:
+                self.mode = "step"
+                self._breakpoint_at = None
+                return True
+            return False
+        return True  # step mode
+
+    async def wait_for_release(self, tool: str, args: dict, result: dict) -> None:
+        """Block until the debugger releases this call."""
+        async with self._lock:
+            self._call_index += 1
+            self._pending = {
+                "index": self._call_index,
+                "tool": tool,
+                "args": args,
+                "result_summary": str(result)[:500],
+                "result": result,
+            }
+            self._release_event.clear()
+            self._pending_event.set()
+
+        logger.info("DEBUG STEP: paused at call #%d (%s)", self._call_index, tool)
+
+        # Block until released
+        await self._release_event.wait()
+
+        async with self._lock:
+            self._pending = None
+            self._pending_event.clear()
+
+    async def get_pending(self) -> dict | None:
+        async with self._lock:
+            return self._pending
+
+    async def release(self) -> bool:
+        async with self._lock:
+            if self._pending is None:
+                return False
+        self._release_event.set()
+        return True
+
+    async def set_mode(self, mode: str, breakpoint_at: int | None = None):
+        async with self._lock:
+            self.mode = mode
+            self._breakpoint_at = breakpoint_at
+        # If switching to continue and something is pending, release it
+        if mode == "continue" and self._pending is not None:
+            self._release_event.set()
+
+
+stepper = DebugStepper()
+
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -769,6 +856,10 @@ async def handle_tool(tool_name: str, request: Request):
 
     result = handler(data, scenario)
 
+    # Debug stepping — block until debugger releases
+    if await stepper.should_pause():
+        await stepper.wait_for_release(tool_name, data, result)
+
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "tool": tool_name,
@@ -833,6 +924,87 @@ async def list_tools():
         "tools": sorted(TOOL_HANDLERS.keys()),
         "count": len(TOOL_HANDLERS),
     }
+
+
+# ============================================================================
+# Debug Stepping Endpoints
+# ============================================================================
+
+@app.get("/debug/status")
+async def debug_status():
+    """Current debug stepper state."""
+    pending = await stepper.get_pending()
+    return {
+        "enabled": stepper.enabled,
+        "mode": stepper.mode,
+        "call_index": stepper._call_index,
+        "has_pending": pending is not None,
+        "pending": {
+            "index": pending["index"],
+            "tool": pending["tool"],
+            "args": pending["args"],
+            "result_summary": pending["result_summary"],
+        } if pending else None,
+    }
+
+
+@app.get("/debug/pending")
+async def debug_pending():
+    """Get the currently paused tool call (if any)."""
+    pending = await stepper.get_pending()
+    if pending is None:
+        return {"pending": False}
+    return {
+        "pending": True,
+        "index": pending["index"],
+        "tool": pending["tool"],
+        "args": pending["args"],
+        "result_summary": pending["result_summary"],
+        "result": pending["result"],
+    }
+
+
+@app.post("/debug/release")
+async def debug_release():
+    """Release the currently paused tool call."""
+    released = await stepper.release()
+    return {"released": released}
+
+
+@app.post("/debug/mode")
+async def debug_set_mode(request: Request):
+    """Set debug mode: step, continue, or break at N.
+
+    Body: {"mode": "step"} or {"mode": "continue"} or {"mode": "continue", "break_at": 5}
+    """
+    body = await request.json()
+    mode = body.get("mode", "step")
+    break_at = body.get("break_at")
+    await stepper.set_mode(mode, break_at)
+    return {"mode": stepper.mode, "break_at": break_at}
+
+
+@app.post("/debug/enable")
+async def debug_enable():
+    """Enable debug stepping mid-session."""
+    stepper.enabled = True
+    stepper.mode = "step"
+    return {"enabled": True}
+
+
+@app.post("/debug/disable")
+async def debug_disable():
+    """Disable debug stepping and release any pending call."""
+    stepper.enabled = False
+    await stepper.release()
+    return {"enabled": False}
+
+
+@app.post("/debug/reset")
+async def debug_reset():
+    """Reset debug state (for new episodes)."""
+    await stepper.reset()
+    return {"reset": True}
 
 
 # ============================================================================
